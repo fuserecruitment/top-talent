@@ -2441,6 +2441,21 @@ function saveAbTest(branch, abTest) {
   branch.subjectLineVariants = JSON.stringify(abTest);
 }
 
+// Opens/Clicks/Job Views are entered as a % of Sent (matching how these get
+// reported off a small test send) rather than as raw counts — Sent is the
+// only one of the four still typed as a whole number. The % shown is always
+// derived from the stored count, and typing a new % re-derives the count
+// from whatever Sent currently is, rounded to the nearest whole send.
+function abPctForInput(sent, count) {
+  return sent > 0 ? +(((count || 0) / sent) * 100).toFixed(1) : "";
+}
+
+function abCountFromPct(sent, pctValue) {
+  const pct = parseFloat(pctValue);
+  if (!sent || isNaN(pct)) return 0;
+  return Math.round(sent * (pct / 100));
+}
+
 // Returns "main" or "variant-N" for whichever entry currently has the best
 // open rate in the A/B test's own small-sample stats, matching Bullhorn
 // Automation's own "Winning!" behavior — just whoever's ahead right now, no
@@ -2560,7 +2575,12 @@ function onAbMainMetricInput(branchId, key, value) {
   const branch = state.branches.find(b => b.branchId === branchId);
   if (!branch) return;
   const abTest = parseAbTest(branch);
-  abTest.main[key] = value === "" ? 0 : parseInt(value, 10) || 0;
+  if (key === "sent") {
+    abTest.main.sent = value === "" ? 0 : parseInt(value, 10) || 0;
+    refreshAbPctInputs(`abStatRow-${branchId}-main`, abTest.main);
+  } else {
+    abTest.main[key] = abCountFromPct(abTest.main.sent, value);
+  }
   saveAbTest(branch, abTest);
   const rate = abTest.main.sent > 0 ? ((abTest.main.opens || 0) / abTest.main.sent * 100).toFixed(1) + "%" : "—";
   const rateEl = document.getElementById(`abMainRate-${branchId}`);
@@ -2569,12 +2589,34 @@ function onAbMainMetricInput(branchId, key, value) {
   state.hasUnsavedChanges = true;
 }
 
+// Sent's own input is a raw count, but Opens/Clicks/Job Views are typed and
+// displayed as a % of Sent — so when Sent changes, those three % fields need
+// to be redrawn against the new Sent even though their underlying counts
+// didn't change. Skipped while a % field itself has focus so it isn't
+// overwritten mid-edit.
+function refreshAbPctInputs(rowId, stats) {
+  const row = document.getElementById(rowId);
+  if (!row) return;
+  const inputs = row.querySelectorAll("input[type=number]");
+  const pctFields = [["opens", inputs[1]], ["clicks", inputs[2]], ["jobViews", inputs[3]]];
+  pctFields.forEach(([key, input]) => {
+    if (input && document.activeElement !== input) {
+      input.value = abPctForInput(stats.sent, stats[key]);
+    }
+  });
+}
+
 function onVariantMetricInput(branchId, idx, key, value) {
   const branch = state.branches.find(b => b.branchId === branchId);
   if (!branch) return;
   const abTest = parseAbTest(branch);
   if (!abTest.variants[idx]) return;
-  abTest.variants[idx][key] = value === "" ? 0 : parseInt(value, 10) || 0;
+  if (key === "sent") {
+    abTest.variants[idx].sent = value === "" ? 0 : parseInt(value, 10) || 0;
+    refreshAbPctInputs(`abStatRow-${branchId}-${idx}`, abTest.variants[idx]);
+  } else {
+    abTest.variants[idx][key] = abCountFromPct(abTest.variants[idx].sent, value);
+  }
   saveAbTest(branch, abTest);
   const rate = abTest.variants[idx].sent > 0 ? ((abTest.variants[idx].opens || 0) / abTest.variants[idx].sent * 100).toFixed(1) + "%" : "—";
   const rateEl = document.getElementById(`abRate-${branchId}-${idx}`);
@@ -3186,9 +3228,9 @@ function renderMetricsRows() {
         <div class="ab-variant-stats-header">
           <span></span><span></span>
           <span title="Sent">Sent</span>
-          <span title="Opens">Open</span>
-          <span title="Clicks">Click</span>
-          <span title="Job Views">Job Vw</span>
+          <span title="Opens as a % of Sent">Open %</span>
+          <span title="Clicks as a % of Sent">Click %</span>
+          <span title="Job Views as a % of Sent">Job Vw %</span>
           <span title="Open Rate">Rate</span>
         </div>
         <div class="ab-variant-stat-row ab-variant-stat-row-main ${winnerKey === "main" ? "ab-variant-winner" : ""}" id="abStatRow-${b.branchId}-main">
@@ -3198,9 +3240,9 @@ function renderMetricsRows() {
             <span class="ab-winner-badge" style="display:${winnerKey === "main" ? "" : "none"}">🏆 Winning</span>
           </span>
           <input type="number" min="0" value="${main.sent || 0}" onchange="onAbMainMetricInput('${b.branchId}', 'sent', this.value)" title="Sent">
-          <input type="number" min="0" value="${main.opens || 0}" onchange="onAbMainMetricInput('${b.branchId}', 'opens', this.value)" title="Opens">
-          <input type="number" min="0" value="${main.clicks || 0}" onchange="onAbMainMetricInput('${b.branchId}', 'clicks', this.value)" title="Clicks">
-          <input type="number" min="0" value="${main.jobViews || 0}" onchange="onAbMainMetricInput('${b.branchId}', 'jobViews', this.value)" title="Job Views">
+          <input type="number" min="0" max="100" step="0.1" value="${abPctForInput(main.sent, main.opens)}" onchange="onAbMainMetricInput('${b.branchId}', 'opens', this.value)" title="Opens (% of Sent)">
+          <input type="number" min="0" max="100" step="0.1" value="${abPctForInput(main.sent, main.clicks)}" onchange="onAbMainMetricInput('${b.branchId}', 'clicks', this.value)" title="Clicks (% of Sent)">
+          <input type="number" min="0" max="100" step="0.1" value="${abPctForInput(main.sent, main.jobViews)}" onchange="onAbMainMetricInput('${b.branchId}', 'jobViews', this.value)" title="Job Views (% of Sent)">
           <span class="ab-variant-rate" id="abMainRate-${b.branchId}">${mainOpenRate}</span>
         </div>
         ${variants.map((v, vi) => {
@@ -3214,9 +3256,9 @@ function renderMetricsRows() {
               <span class="ab-winner-badge" style="display:${isWinner ? "" : "none"}">🏆 Winning</span>
             </span>
             <input type="number" min="0" value="${v.sent || 0}" onchange="onVariantMetricInput('${b.branchId}', ${vi}, 'sent', this.value)" title="Sent">
-            <input type="number" min="0" value="${v.opens || 0}" onchange="onVariantMetricInput('${b.branchId}', ${vi}, 'opens', this.value)" title="Opens">
-            <input type="number" min="0" value="${v.clicks || 0}" onchange="onVariantMetricInput('${b.branchId}', ${vi}, 'clicks', this.value)" title="Clicks">
-            <input type="number" min="0" value="${v.jobViews || 0}" onchange="onVariantMetricInput('${b.branchId}', ${vi}, 'jobViews', this.value)" title="Job Views">
+            <input type="number" min="0" max="100" step="0.1" value="${abPctForInput(v.sent, v.opens)}" onchange="onVariantMetricInput('${b.branchId}', ${vi}, 'opens', this.value)" title="Opens (% of Sent)">
+            <input type="number" min="0" max="100" step="0.1" value="${abPctForInput(v.sent, v.clicks)}" onchange="onVariantMetricInput('${b.branchId}', ${vi}, 'clicks', this.value)" title="Clicks (% of Sent)">
+            <input type="number" min="0" max="100" step="0.1" value="${abPctForInput(v.sent, v.jobViews)}" onchange="onVariantMetricInput('${b.branchId}', ${vi}, 'jobViews', this.value)" title="Job Views (% of Sent)">
             <span class="ab-variant-rate" id="abRate-${b.branchId}-${vi}">${openRate}</span>
           </div>`;
         }).join("")}
