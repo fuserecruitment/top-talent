@@ -1186,6 +1186,7 @@ function renderMetricsOverviewView() {
             <div>
               <b>${c.campaignId}</b>
               <div style="font-size:11px;color:var(--ink-soft)">${c.industry || ""}</div>
+              ${(c.campaignLink || c.CampaignLink) ? `<a href="${c.campaignLink || c.CampaignLink}" target="_blank" onclick="event.stopPropagation()" style="font-size:11px;">🔗 Open in Bullhorn</a>` : ""}
             </div>
           </div>
         </td>
@@ -3164,6 +3165,7 @@ function renderMetricsView() {
     <div>
       <div class="branch-header-title">Metrics — ${c.Title}</div>
       <div class="branch-header-sub">Manually entered per branch · numbers come from your email platform</div>
+      ${c.CampaignLink ? `<div class="meta-line"><a href="${c.CampaignLink}" target="_blank">🔗 Open Campaign in Bullhorn</a></div>` : ""}
     </div>
     <button class="btn btn-ghost btn-sm" onclick="backToCampaign()" style="flex-shrink:0;">📋 View Campaign &amp; Branches</button>
   `;
