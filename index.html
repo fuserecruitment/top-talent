@@ -2293,8 +2293,8 @@ function switchTab(tab) {
 }
 
 // Compose with the same comments rail the Review tab uses, so feedback can be
-// read and ticked off while editing without switching tabs. New notes are
-// still added from the Review tab, where the read-only email is annotated.
+// read while editing without switching tabs. They're read-only here: adding
+// and resolving notes only happens on the Review tab.
 function renderComposeWithComments(branch, isDenied) {
   const wrap = document.createElement("div");
   wrap.className = "review-split";
@@ -4316,7 +4316,7 @@ function renderReviewRail(branchId) {
 function renderReviewCommentHtml(cm) {
   return `
     <div class="review-comment ${cm.isResolved ? "resolved" : ""}" id="reviewComment-${cm.id}">
-      <input type="checkbox" ${cm.isResolved ? "checked" : ""} onchange="toggleReviewComment(${cm.id}, this.checked)">
+      <input type="checkbox" ${cm.isResolved ? "checked" : ""} ${state.activeTab === "review" ? "" : `disabled title="Comments can only be resolved from the Review tab"`} onchange="toggleReviewComment(${cm.id}, this.checked)">
       <div class="review-comment-body">
         <div class="review-comment-text">${cm.commentText}</div>
         <div class="review-comment-meta">${cm.commentedBy || "Unknown"} · ${fmtDate(cm.created)}</div>
@@ -4326,6 +4326,7 @@ function renderReviewCommentHtml(cm) {
 }
 
 async function toggleReviewComment(commentId, isResolved) {
+  if (state.activeTab !== "review") return;
   try {
     await callFlow(FLOW_URLS.toggleCommentResolved, { commentId, isResolved });
     // Update the cached copy too, so the current filter view and the
