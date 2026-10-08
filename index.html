@@ -207,6 +207,13 @@
   .review-comment input[type=checkbox]{margin-top:2px;width:auto;}
   .review-comment-body{flex:1;min-width:0;}
   .review-comment-meta{font-size:10.5px;color:var(--ink-soft);margin-top:3px;}
+  .review-reply{border-left:2px solid var(--line);margin-top:6px;padding-left:8px;font-size:12px;}
+  .review-reply-btn{
+    background:none;border:none;color:var(--accent);font-size:11px;font-weight:600;cursor:pointer;
+    padding:0;margin-top:4px;font-family:'Work Sans',sans-serif;
+  }
+  .review-reply-box{display:flex;gap:6px;margin-top:6px;}
+  .review-reply-box input{flex:1;min-width:0;margin-bottom:0;font-size:12px;padding:5px 7px;}
 
   /* Inline "+ Note" trigger and box, injected next to fields in the main column.
      The trigger sits in the top-right corner of its field, tucked away until
@@ -4208,8 +4215,24 @@ async function loadAndRenderReview(branchId) {
     return;
   }
 
+  // Replies are stored as ordinary comments whose text starts with a
+  // "[[reply:<parent id>]]" marker. Split them out here so everything else
+  // (open counts, filters, highlighting) only ever sees top-level comments.
+  const replyMarker = /^\[\[reply:(\d+)\]\]\s*/;
+  const parentIds = new Set(comments.filter(cm => !replyMarker.test(cm.commentText || "")).map(cm => String(cm.id)));
+  const replies = [];
+  const topLevel = [];
+  comments.forEach(cm => {
+    const m = replyMarker.exec(cm.commentText || "");
+    if (!m) { topLevel.push(cm); return; }
+    const stripped = { ...cm, commentText: cm.commentText.replace(replyMarker, "") };
+    if (parentIds.has(m[1])) replies.push({ ...stripped, parentId: m[1] });
+    else topLevel.push(stripped);
+  });
+  comments = topLevel;
+
   // Cache so switching the All/Open/Resolved filter doesn't need a refetch
-  state.reviewCommentsCache = { branchId, comments };
+  state.reviewCommentsCache = { branchId, comments, replies };
   if (!state.reviewFilter) state.reviewFilter = "all";
 
   // Highlight candidate rows in the main column that have open notes
@@ -4314,15 +4337,60 @@ function renderReviewRail(branchId) {
 }
 
 function renderReviewCommentHtml(cm) {
+  const cache = state.reviewCommentsCache;
+  const replies = (cache.replies || []).filter(r => r.parentId === String(cm.id));
+  const denied = state.lockDenied && state.lockDenied.branchId === cache.branchId;
   return `
     <div class="review-comment ${cm.isResolved ? "resolved" : ""}" id="reviewComment-${cm.id}">
       <input type="checkbox" ${cm.isResolved ? "checked" : ""} ${state.activeTab === "review" ? "" : `disabled title="Comments can only be resolved from the Review tab"`} onchange="toggleReviewComment(${cm.id}, this.checked)">
       <div class="review-comment-body">
         <div class="review-comment-text">${cm.commentText}</div>
         <div class="review-comment-meta">${cm.commentedBy || "Unknown"} · ${fmtDate(cm.created)}</div>
+        ${replies.map(r => `
+          <div class="review-reply">
+            <div class="review-comment-text">${escapeHtml(r.commentText)}</div>
+            <div class="review-comment-meta">${escapeHtml(r.commentedBy || "Unknown")} · ${fmtDate(r.created)}</div>
+          </div>`).join("")}
+        <div id="replyArea-${cm.id}">
+          ${denied ? "" : `<button type="button" class="review-reply-btn" onclick="showReplyBox(${cm.id})">Reply</button>`}
+        </div>
       </div>
     </div>
   `;
+}
+
+function showReplyBox(commentId) {
+  const area = document.getElementById(`replyArea-${commentId}`);
+  if (!area || document.getElementById(`replyInput-${commentId}`)) return;
+  area.innerHTML = `
+    <div class="review-reply-box">
+      <input type="text" id="replyInput-${commentId}" placeholder="Write a reply..." onkeydown="if(event.key==='Enter')submitReply(${commentId})">
+      <button class="btn btn-accent btn-sm" onclick="submitReply(${commentId})">Send</button>
+    </div>
+  `;
+  document.getElementById(`replyInput-${commentId}`).focus();
+}
+
+async function submitReply(commentId) {
+  const input = document.getElementById(`replyInput-${commentId}`);
+  const text = input ? input.value.trim() : "";
+  if (!text) return;
+  const userName = getUserName();
+  if (!userName) { toast("Enter your name before replying", "error"); return; }
+  const branchId = state.reviewCommentsCache.branchId;
+  const parent = state.reviewCommentsCache.comments.find(cm => cm.id === commentId);
+  if (!branchId || !parent) return;
+
+  try {
+    await callFlow(FLOW_URLS.addComment, {
+      branchId, sectionKey: parent.sectionKey, commentText: `[[reply:${commentId}]] ${text}`,
+      commentedBy: userName, isResolved: false
+    });
+    toast("Reply added", "success");
+    await loadAndRenderReview(branchId);
+  } catch (err) {
+    toast("Couldn't add reply: " + err.message, "error");
+  }
 }
 
 async function toggleReviewComment(commentId, isResolved) {
