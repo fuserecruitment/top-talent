@@ -2249,7 +2249,7 @@ function renderBranchWorkspace(branch) {
   wrap.appendChild(tabContent);
 
   if (state.activeTab === "compose") {
-    tabContent.appendChild(renderComposeTab(branch, isDenied));
+    tabContent.appendChild(renderComposeWithComments(branch, isDenied));
   } else if (state.activeTab === "review") {
     tabContent.appendChild(renderReviewTab(branch, isDenied));
   } else {
@@ -2290,6 +2290,28 @@ function renderBranchWorkspace(branch) {
 function switchTab(tab) {
   state.activeTab = tab;
   renderWorkspace();
+}
+
+// Compose with the same comments rail the Review tab uses, so feedback can be
+// read and ticked off while editing without switching tabs. New notes are
+// still added from the Review tab, where the read-only email is annotated.
+function renderComposeWithComments(branch, isDenied) {
+  const wrap = document.createElement("div");
+  wrap.className = "review-split";
+
+  const left = document.createElement("div");
+  left.className = "review-split-left";
+  left.appendChild(renderComposeTab(branch, isDenied));
+
+  const right = document.createElement("div");
+  right.className = "review-split-right";
+  right.id = `reviewCommentsRail-${branch.branchId}`;
+  right.innerHTML = `<div class="empty-state" style="padding:30px 10px"><span class="spinner dark"></span><div style="margin-top:8px;font-size:12px;">Loading comments…</div></div>`;
+
+  wrap.appendChild(left);
+  wrap.appendChild(right);
+  setTimeout(() => loadAndRenderReview(branch.branchId), 0);
+  return wrap;
 }
 
 /* =========================================================
@@ -4248,7 +4270,9 @@ function renderReviewRail(branchId) {
   if (allComments.length === 0) {
     rail.innerHTML = `
       <h3 class="review-rail-title">Comments</h3>
-      <div style="font-size:12.5px;color:var(--ink-soft);padding:6px 2px;">No notes yet — click "+ Note" next to any field to add one.</div>
+      <div style="font-size:12.5px;color:var(--ink-soft);padding:6px 2px;">${state.activeTab === "compose"
+        ? "No notes yet — notes are added from the Review tab."
+        : `No notes yet — click "+ Note" next to any field to add one.`}</div>
     `;
     return;
   }
