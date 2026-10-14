@@ -207,6 +207,15 @@
   .review-comment input[type=checkbox]{margin-top:2px;width:auto;}
   .review-comment-body{flex:1;min-width:0;}
   .review-comment-meta{font-size:10.5px;color:var(--ink-soft);margin-top:3px;}
+  .top-titles-wrap{margin-bottom:14px;}
+  .top-titles-wrap summary{cursor:pointer;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);}
+  .top-titles{display:flex;flex-wrap:wrap;gap:6px;}
+  .top-title-chip{
+    background:var(--accent-soft);color:var(--ink);border:1.5px solid transparent;border-radius:999px;
+    padding:4px 11px;font-size:12px;font-weight:600;cursor:pointer;font-family:'Work Sans',sans-serif;
+  }
+  .top-title-chip:hover{border-color:var(--accent);}
+  .top-title-chip span{color:var(--accent);margin-left:4px;}
   .review-reply{border-left:2px solid var(--line);margin-top:6px;padding-left:8px;font-size:12px;}
   .review-reply-btn{
     background:none;border:none;color:var(--accent);font-size:11px;font-weight:600;cursor:pointer;
@@ -2413,6 +2422,7 @@ function renderComposeTab(branch, isDenied) {
     </div>
 
     <div class="card">
+      ${isDenied ? "" : renderTopTitlesHtml(branch.branchId)}
       <div class="candidates-list" id="candidatesList-${branch.branchId}"></div>
       ${isDenied ? "" : `
       <button class="btn btn-ghost btn-sm" onclick="showNewCandidateForm('${branch.branchId}')">+ Add Candidate</button>
@@ -3606,6 +3616,49 @@ function removeCandidate(branchId, candidateId) {
       });
     }
   });
+}
+
+// Most common Current Titles across every candidate in the database, grouped
+// case-insensitively and shown under the shortest/most common spelling.
+function getTopTitles(limit = 12) {
+  const groups = new Map();
+  state.allCandidates.forEach(c => {
+    const title = (c.title || "").trim();
+    if (!title) return;
+    const key = title.toLowerCase();
+    const g = groups.get(key) || { count: 0, spellings: new Map() };
+    g.count++;
+    g.spellings.set(title, (g.spellings.get(title) || 0) + 1);
+    groups.set(key, g);
+  });
+  return [...groups.values()]
+    .map(g => ({ title: [...g.spellings.entries()].sort((a, b) => b[1] - a[1])[0][0], count: g.count }))
+    .sort((a, b) => b.count - a.count || a.title.localeCompare(b.title))
+    .slice(0, limit);
+}
+
+function renderTopTitlesHtml(branchId) {
+  state.topTitlesCache = getTopTitles();
+  const chips = state.topTitlesCache.length === 0
+    ? `<div style="font-size:12.5px;color:var(--ink-soft);">No candidate titles to count yet.</div>`
+    : `<div class="top-titles">${state.topTitlesCache.map((t, i) =>
+        `<button type="button" class="top-title-chip" onclick="useTopTitle('${branchId}', ${i})" title="Add a candidate with this title">${escapeHtml(t.title)} <span>${t.count}</span></button>`
+      ).join("")}</div>`;
+  return `
+    <details class="top-titles-wrap">
+      <summary>Most used job titles</summary>
+      <div style="font-size:12px;color:var(--ink-soft);margin:6px 0 8px;">Across all candidates added so far. Click one to start a new candidate with that title.</div>
+      ${chips}
+    </details>`;
+}
+
+function useTopTitle(branchId, idx) {
+  const entry = (state.topTitlesCache || [])[idx];
+  if (!entry) return;
+  const container = document.getElementById(`newCandForm-${branchId}`);
+  if (container && container.dataset.open !== "true") showNewCandidateForm(branchId);
+  const input = document.getElementById(`newCandTitle-${branchId}`);
+  if (input) { input.value = entry.title; input.focus(); }
 }
 
 function showNewCandidateForm(branchId) {
