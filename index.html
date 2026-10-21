@@ -1108,7 +1108,12 @@ function sanitizeForCopy(html) {
     let out = "";
     node.childNodes.forEach(child => {
       if (child.nodeType === Node.TEXT_NODE) {
-        out += child.textContent;
+        const t = child.textContent;
+        // Whitespace-only text between tags is just source-code indentation
+        if (t.trim() === "" && t !== " " && /[\r\n]/.test(t)) return;
+        // Non-breaking spaces inside real text stop lines wrapping in the
+        // email body; only a lone one (a deliberate spacer paragraph) stays.
+        out += t === " " ? t : escapeHtml(t.replace(/ /g, " "));
       } else if (child.nodeType === Node.ELEMENT_NODE) {
         const tag = child.tagName.toLowerCase();
         const inner = walk(child);
@@ -1122,6 +1127,12 @@ function sanitizeForCopy(html) {
           if (inner === "\u00A0") out += `<p>${inner}</p>`; // deliberate blank-line spacer — keep
           else if (inner.replace(/\u00A0/g, "").trim() !== "") out += `<p>${inner}</p>`; // has real content — keep
           // else: genuinely empty paragraph (leftover from messy source data) — drop it entirely
+        }
+        else if (tag === "div" || /^h[1-6]$/.test(tag)) {
+          // Block wrappers become paragraphs (so adjacent ones don't run
+          // together), unless they only wrap other blocks already.
+          if (/<(p|ul|ol)[\s>]/i.test(inner)) out += inner;
+          else if (inner.replace(/ /g, "").trim() !== "") out += `<p>${inner}</p>`;
         }
         else out += inner; // unwrap anything else — keep the text, drop the tag
       }
@@ -4531,7 +4542,7 @@ function renderPreviewInto(container, branchId) {
   let candidatesHtmlForCopy = (branch.candidates || []).map(c => {
     const cleanBlurb = sanitizeForCopy(c.blurb || "");
     const withRef = appendRefBullet(cleanBlurb, c.candidateId);
-    return `<p><b>${c.currentTitle || c.name || ""}</b></p>${withRef}`;
+    return `<p><b>${escapeHtml(c.currentTitle || c.name || "")}</b></p>${withRef}`;
   }).join("<p>&nbsp;</p>");
   if (!candidatesHtmlForCopy) candidatesHtmlForCopy = "";
   else candidatesHtmlForCopy += "<p>&nbsp;</p>";
@@ -4544,8 +4555,8 @@ function renderPreviewInto(container, branchId) {
   // What actually gets copied for the combined block — greeting and sign-off
   // stripped out, since those are handled separately (merge tags / signature
   // block) rather than being pasted as literal text.
-  const introForCopy = stripGreetingLine(intro).replace(/\n/g, "<br>");
-  const outroForCopy = stripSignoffLine(outro).replace(/\n/g, "<br>");
+  const introForCopy = escapeHtml(stripGreetingLine(intro)).replace(/\n/g, "<br>");
+  const outroForCopy = escapeHtml(stripSignoffLine(outro)).replace(/\n/g, "<br>");
   const mainCopyHtml = `${introForCopy ? `<p>${introForCopy}</p><p>&nbsp;</p>` : ""}${candidatesHtmlForCopy}${outroForCopy ? `<p>${outroForCopy}</p>` : ""}`;
 
   const { variants } = parseAbTest(branch);
