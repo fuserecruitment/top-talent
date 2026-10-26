@@ -717,6 +717,12 @@
   }
   .mt-item .mt-label{font-size:10.5px;color:rgba(255,255,255,.55);text-transform:uppercase;letter-spacing:.04em;}
   .mt-item .mt-value{font-size:17px;font-weight:700;margin-top:2px;}
+  .mt-compare{font-size:10.5px;color:rgba(255,255,255,.45);margin-top:2px;}
+  .mt-caption{font-size:12px;color:var(--ink-soft);margin-bottom:6px;}
+  .overview-filters{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:16px;}
+  .overview-filters > div{flex:1;min-width:130px;}
+  .overview-filters label{margin-bottom:4px;}
+  .overview-filters input,.overview-filters select{margin-bottom:0;}
   .metrics-sidebar-btn{
     display:block;width:100%;text-align:left;padding:9px 12px;margin-top:8px;border-radius:7px;border:none;
     background:rgba(255,255,255,.06);color:rgba(255,255,255,.8);font-family:'Work Sans',sans-serif;
@@ -815,6 +821,7 @@ let state = {
   lockDenied: null,
   roleTitles: [],
   allCandidates: [],
+  overviewFilters: { industry: "", status: "", from: "", to: "", search: "" }, // Metrics Overview filters
   allCampaigns: [],         // every campaign, for the sidebar list
   industryFilter: "",       // "" = show all industries in the sidebar list
   creatingCampaign: false, // true while the New Campaign form is showing
@@ -1203,10 +1210,111 @@ async function showMetricsOverview() {
   renderWorkspace();
 }
 
-function renderMetricsOverviewView() {
-  const wrap = document.createElement("div");
+function overviewFiltersActive() {
+  const f = state.overviewFilters;
+  return !!(f.industry || f.status || f.from || f.to || f.search.trim());
+}
 
-  const rows = state.allCampaigns.map(c => {
+function getFilteredCampaigns() {
+  const f = state.overviewFilters;
+  const q = f.search.trim().toLowerCase();
+  return state.allCampaigns.filter(c => {
+    if (f.industry && c.industry !== f.industry) return false;
+    if (f.status && c.status !== f.status) return false;
+    if (q && !(c.campaignId || "").toLowerCase().includes(q)) return false;
+    if (f.from || f.to) {
+      const d = (c.sendDate || "").slice(0, 10);
+      if (!d) return false; // unscheduled campaigns have no date to compare
+      if (f.from && d < f.from) return false;
+      if (f.to && d > f.to) return false;
+    }
+    return true;
+  });
+}
+
+function sumCampaigns(list) {
+  const t = { sent:0, opens:0, clicks:0, actions:0, bounces:0, unsubs:0, totalClicks:0, pageViews:0, jobViews:0, replies:0 };
+  list.forEach(c => { Object.keys(t).forEach(k => { t[k] += c[k] || 0; }); });
+  return t;
+}
+
+function setOverviewFilter(key, value) {
+  state.overviewFilters[key] = value;
+  renderOverviewResults();
+}
+
+function clearOverviewFilters() {
+  state.overviewFilters = { industry: "", status: "", from: "", to: "", search: "" };
+  renderWorkspace();
+}
+
+// Redraws only the totals bar and the table, so typing in the search box
+// (or picking a date) doesn't rebuild the filter inputs and lose focus.
+function renderOverviewResults() {
+  renderOverviewResultsInto(document);
+}
+
+function renderOverviewResultsInto(root) {
+  const filtered = getFilteredCampaigns();
+  const totalsEl = root.querySelector("#overviewTotals");
+  const tableEl = root.querySelector("#overviewTableBody");
+  if (totalsEl) totalsEl.innerHTML = overviewTotalsHtml(filtered);
+  if (tableEl) {
+    tableEl.innerHTML = filtered.length
+      ? filtered.map(overviewRowHtml).join("")
+      : `<tr><td colspan="13" style="text-align:center;color:var(--ink-soft);padding:22px;">No campaigns match these filters.</td></tr>`;
+  }
+}
+
+// With filters on, the bar shows the filtered figures and puts the all-
+// campaign figure under each one, so the comparison is right there without
+// scrolling.
+function overviewTotalsHtml(filtered) {
+  const isFiltered = overviewFiltersActive();
+  const f = sumCampaigns(filtered), all = sumCampaigns(state.allCampaigns);
+  const fm = calcMetrics(f), am = calcMetrics(all);
+  const items = [
+    ["Total Sent", f.sent || "—", all.sent || "—"],
+    ["Delivered", f.sent > 0 ? fm.delivered : "—", all.sent > 0 ? am.delivered : "—"],
+    ["Open Rate", fm.openRate, am.openRate],
+    ["Click Rate", fm.clickRate, am.clickRate],
+    ["Action Rate", fm.actionRate, am.actionRate],
+    ["Bounce Rate", fm.bpct, am.bpct],
+    ["Unsub Rate", fm.unsubRate, am.unsubRate],
+    ["Total Clicks", f.totalClicks || "—", all.totalClicks || "—"],
+    ["Page Views", f.pageViews || "—", all.pageViews || "—"],
+    ["Job Views", f.jobViews || "—", all.jobViews || "—"],
+    ["Replies", f.replies || "—", all.replies || "—"]
+  ];
+  return `
+    ${isFiltered ? `<div class="mt-caption">Filtered: ${filtered.length} of ${state.allCampaigns.length} campaigns · the grey "All" figure under each number is every campaign</div>` : ""}
+    <div class="metrics-totals-bar">
+      ${items.map(([label, val, allVal]) => `
+        <div class="mt-item"><div class="mt-label">${label}</div><div class="mt-value">${val}</div>${isFiltered ? `<div class="mt-compare">All: ${allVal}</div>` : ""}</div>`).join("")}
+    </div>`;
+}
+
+function overviewFilterBarHtml() {
+  const f = state.overviewFilters;
+  const industries = [...new Set([...INDUSTRIES, ...state.allCampaigns.map(c => c.industry).filter(Boolean)])];
+  const opts = (list, selected) => list.map(v => `<option value="${escapeHtml(v)}" ${v === selected ? "selected" : ""}>${escapeHtml(v)}</option>`).join("");
+  return `
+    <div class="overview-filters">
+      <div><label>Industry</label>
+        <select onchange="setOverviewFilter('industry', this.value)"><option value="">All industries</option>${opts(industries, f.industry)}</select></div>
+      <div><label>Status</label>
+        <select onchange="setOverviewFilter('status', this.value)"><option value="">All statuses</option>${opts(STATUS_OPTIONS, f.status)}</select></div>
+      <div><label>Send date from</label>
+        <input type="date" value="${f.from}" onchange="setOverviewFilter('from', this.value)"></div>
+      <div><label>Send date to</label>
+        <input type="date" value="${f.to}" onchange="setOverviewFilter('to', this.value)"></div>
+      <div><label>Campaign name</label>
+        <input type="text" placeholder="Search…" value="${escapeHtml(f.search)}" oninput="setOverviewFilter('search', this.value)"></div>
+      <button class="btn btn-ghost btn-sm" onclick="clearOverviewFilters()">Clear filters</button>
+    </div>`;
+}
+
+function overviewRowHtml(c) {
     const m = calcMetrics(c);
     return `
       <tr onclick="loadCampaignAndShowMetrics('${c.campaignId}')" style="cursor:pointer">
@@ -1233,16 +1341,10 @@ function renderMetricsOverviewView() {
         <td>${c.jobViews || "—"}</td>
         <td>${c.replies || "—"}</td>
       </tr>`;
-  }).join("");
+}
 
-  let grand = { sent:0, opens:0, clicks:0, actions:0, bounces:0, unsubs:0, totalClicks:0, pageViews:0, jobViews:0, replies:0 };
-  state.allCampaigns.forEach(c => {
-    grand.sent += c.sent||0; grand.opens += c.opens||0; grand.clicks += c.clicks||0;
-    grand.actions += c.actions||0; grand.bounces += c.bounces||0; grand.unsubs += c.unsubs||0;
-    grand.totalClicks += c.totalClicks||0; grand.pageViews += c.pageViews||0;
-    grand.jobViews += c.jobViews||0; grand.replies += c.replies||0;
-  });
-  const gm = calcMetrics(grand);
+function renderMetricsOverviewView() {
+  const wrap = document.createElement("div");
 
   const cachedOverview = state.overviewInsight;
   const overviewHasCached = !!(cachedOverview && cachedOverview.text && cachedOverview.text.trim());
@@ -1253,19 +1355,8 @@ function renderMetricsOverviewView() {
       <div class="branch-header-sub">Every campaign's totals, rolled up from its branches — click a row for its metrics, or 📋 to open the campaign and branches</div>
     </div>
     <div class="card">
-      <div class="metrics-totals-bar">
-        <div class="mt-item"><div class="mt-label">Total Sent</div><div class="mt-value">${grand.sent || "—"}</div></div>
-        <div class="mt-item"><div class="mt-label">Delivered</div><div class="mt-value">${grand.sent > 0 ? gm.delivered : "—"}</div></div>
-        <div class="mt-item"><div class="mt-label">Open Rate</div><div class="mt-value">${gm.openRate}</div></div>
-        <div class="mt-item"><div class="mt-label">Click Rate</div><div class="mt-value">${gm.clickRate}</div></div>
-        <div class="mt-item"><div class="mt-label">Action Rate</div><div class="mt-value">${gm.actionRate}</div></div>
-        <div class="mt-item"><div class="mt-label">Bounce Rate</div><div class="mt-value">${gm.bpct}</div></div>
-        <div class="mt-item"><div class="mt-label">Unsub Rate</div><div class="mt-value">${gm.unsubRate}</div></div>
-        <div class="mt-item"><div class="mt-label">Total Clicks</div><div class="mt-value">${grand.totalClicks || "—"}</div></div>
-        <div class="mt-item"><div class="mt-label">Page Views</div><div class="mt-value">${grand.pageViews || "—"}</div></div>
-        <div class="mt-item"><div class="mt-label">Job Views</div><div class="mt-value">${grand.jobViews || "—"}</div></div>
-        <div class="mt-item"><div class="mt-label">Replies</div><div class="mt-value">${grand.replies || "—"}</div></div>
-      </div>
+      ${overviewFilterBarHtml()}
+      <div id="overviewTotals"></div>
       <button class="btn btn-ghost btn-sm" id="overviewInsightsBtn" data-has-cached="${overviewHasCached}" onclick="generateOverviewInsights()" style="margin-bottom:4px;">${overviewHasCached ? "🔄 Regenerate Insights" : "✨ Get AI Insights"}</button>
       <div class="ai-insights-box" id="overviewInsightsResult" style="${overviewHasCached ? "display:block;" : ""}">${overviewHasCached ? renderInsightsBoxContent(cachedOverview.text, cachedOverview.generatedAt) : ""}</div>
       <div class="metrics-table-wrap">
@@ -1277,7 +1368,7 @@ function renderMetricsOverviewView() {
               <th>Bounces</th><th>Unsubs</th><th>Total Clicks</th><th>Page Views</th><th>Job Views</th><th>Replies</th>
             </tr>
           </thead>
-          <tbody>${rows}</tbody>
+          <tbody id="overviewTableBody"></tbody>
         </table>
       </div>
       <div style="margin-top:14px;font-size:12px;color:var(--ink-soft)">
@@ -1285,6 +1376,7 @@ function renderMetricsOverviewView() {
       </div>
     </div>
   `;
+  renderOverviewResultsInto(wrap);
   return wrap;
 }
 
@@ -3220,7 +3312,10 @@ function renderMetricsView() {
       <div class="branch-header-sub">Manually entered per branch · numbers come from your email platform</div>
       ${c.CampaignLink ? `<div class="meta-line"><a href="${c.CampaignLink}" target="_blank">🔗 Open Campaign in Bullhorn</a></div>` : ""}
     </div>
-    <button class="btn btn-ghost btn-sm" onclick="backToCampaign()" style="flex-shrink:0;">📋 View Campaign &amp; Branches</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;flex-shrink:0;">
+      <button class="btn btn-ghost btn-sm" onclick="showMetricsOverview()">← Metrics Overview</button>
+      <button class="btn btn-ghost btn-sm" onclick="backToCampaign()">📋 View Campaign &amp; Branches</button>
+    </div>
   `;
   wrap.appendChild(header);
 
