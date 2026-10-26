@@ -719,6 +719,11 @@
   .mt-item .mt-value{font-size:17px;font-weight:700;margin-top:2px;}
   .mt-compare{font-size:10.5px;color:rgba(255,255,255,.45);margin-top:2px;}
   .mt-caption{font-size:12px;color:var(--ink-soft);margin-bottom:6px;}
+  .insights-details{margin-bottom:16px;}
+  .insights-details summary{cursor:pointer;font-size:13px;font-weight:700;color:var(--ink);}
+  .filtered-insights{margin-bottom:16px;}
+  .filtered-insights-head{font-size:12.5px;margin-bottom:6px;}
+  .filtered-insights-head span{display:block;color:var(--ink-soft);font-size:12px;margin-top:2px;}
   .overview-filters{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:16px;}
   .overview-filters > div{flex:1;min-width:130px;}
   .overview-filters label{margin-bottom:4px;}
@@ -822,6 +827,8 @@ let state = {
   roleTitles: [],
   allCandidates: [],
   overviewFilters: { industry: "", status: "", from: "", to: "", search: "" }, // Metrics Overview filters
+  overallInsightsOpen: true,  // Metrics Overview: all-campaigns insights panel expanded
+  filteredInsight: null,      // { key, text, generatedAt } — this session only, never saved
   allCampaigns: [],         // every campaign, for the sidebar list
   industryFilter: "",       // "" = show all industries in the sidebar list
   creatingCampaign: false, // true while the New Campaign form is showing
@@ -1258,7 +1265,9 @@ function renderOverviewResultsInto(root) {
   const filtered = getFilteredCampaigns();
   const totalsEl = root.querySelector("#overviewTotals");
   const tableEl = root.querySelector("#overviewTableBody");
+  const insightsEl = root.querySelector("#overviewFilteredInsights");
   if (totalsEl) totalsEl.innerHTML = overviewTotalsHtml(filtered);
+  if (insightsEl) insightsEl.innerHTML = filteredInsightsHtml(filtered);
   if (tableEl) {
     tableEl.innerHTML = filtered.length
       ? filtered.map(overviewRowHtml).join("")
@@ -1355,10 +1364,15 @@ function renderMetricsOverviewView() {
       <div class="branch-header-sub">Every campaign's totals, rolled up from its branches — click a row for its metrics, or 📋 to open the campaign and branches</div>
     </div>
     <div class="card">
+      <details class="insights-details" ${state.overallInsightsOpen ? "open" : ""} ontoggle="state.overallInsightsOpen = this.open">
+        <summary>✨ AI Insights — all campaigns</summary>
+        <div style="font-size:12px;color:var(--ink-soft);margin:6px 0 8px;">Saved summary of every campaign, regardless of the filters below.</div>
+        <button class="btn btn-ghost btn-sm" id="overviewInsightsBtn" data-has-cached="${overviewHasCached}" onclick="generateOverviewInsights()" style="margin-bottom:4px;">${overviewHasCached ? "🔄 Regenerate Insights" : "✨ Get AI Insights"}</button>
+        <div class="ai-insights-box" id="overviewInsightsResult" style="${overviewHasCached ? "display:block;" : ""}">${overviewHasCached ? renderInsightsBoxContent(cachedOverview.text, cachedOverview.generatedAt) : ""}</div>
+      </details>
       ${overviewFilterBarHtml()}
       <div id="overviewTotals"></div>
-      <button class="btn btn-ghost btn-sm" id="overviewInsightsBtn" data-has-cached="${overviewHasCached}" onclick="generateOverviewInsights()" style="margin-bottom:4px;">${overviewHasCached ? "🔄 Regenerate Insights" : "✨ Get AI Insights"}</button>
-      <div class="ai-insights-box" id="overviewInsightsResult" style="${overviewHasCached ? "display:block;" : ""}">${overviewHasCached ? renderInsightsBoxContent(cachedOverview.text, cachedOverview.generatedAt) : ""}</div>
+      <div id="overviewFilteredInsights"></div>
       <div class="metrics-table-wrap">
         <table class="metrics-table">
           <thead>
@@ -3237,7 +3251,17 @@ function generateOverviewInsights() {
   // record an overview-level insight naturally belongs to). This just keeps
   // the local cache in sync so the page doesn't need a full reload to show
   // it as saved.
-  const data = state.allCampaigns.map(c => {
+  const data = overviewInsightRows(state.allCampaigns);
+  runInsightsRequest("overviewInsightsBtn", "overviewInsightsResult", { scope: "overview", data }, (text, generatedAt) => {
+    state.overviewInsight = { text, generatedAt };
+    const btn = document.getElementById("overviewInsightsBtn");
+    if (btn) btn.dataset.hasCached = "true";
+  });
+}
+
+// Chronological, oldest first — needed for trend-over-time analysis
+function overviewInsightRows(list) {
+  return list.map(c => {
     const m = calcMetrics(c);
     return {
       campaignId: c.campaignId, industry: c.industry || "", status: c.status || "",
@@ -3246,11 +3270,59 @@ function generateOverviewInsights() {
       bounces: c.bounces || 0, unsubs: c.unsubs || 0, replies: c.replies || 0,
       openRate: m.openRate, clickRate: m.clickRate, bounceRate: m.bpct
     };
-  }).sort((a, b) => (a.sendDate || "").localeCompare(b.sendDate || "")); // chronological, oldest first — needed for trend-over-time analysis
-  runInsightsRequest("overviewInsightsBtn", "overviewInsightsResult", { scope: "overview", data }, (text, generatedAt) => {
-    state.overviewInsight = { text, generatedAt };
-    const btn = document.getElementById("overviewInsightsBtn");
-    if (btn) btn.dataset.hasCached = "true";
+  }).sort((a, b) => (a.sendDate || "").localeCompare(b.sendDate || ""));
+}
+
+function overviewFilterKey() {
+  return JSON.stringify(state.overviewFilters);
+}
+
+function describeOverviewFilters() {
+  const f = state.overviewFilters;
+  const parts = [];
+  if (f.industry) parts.push(f.industry);
+  if (f.status) parts.push(`status ${f.status}`);
+  if (f.from) parts.push(`sent from ${f.from}`);
+  if (f.to) parts.push(`sent to ${f.to}`);
+  if (f.search.trim()) parts.push(`name contains "${f.search.trim()}"`);
+  return parts.join(", ");
+}
+
+// Insights for the current filtered view. Never saved: the one saved
+// overview insight stays the all-campaigns one, so the request says
+// scope "filtered" with save:false and the result lives only in memory.
+function filteredInsightsHtml(filtered) {
+  if (!overviewFiltersActive() || filtered.length === 0) return "";
+  const cached = state.filteredInsight && state.filteredInsight.key === overviewFilterKey() ? state.filteredInsight : null;
+  return `
+    <div class="filtered-insights">
+      <div class="filtered-insights-head"><b>AI Insights — this filtered view</b>
+        <span>Not saved. Generated on demand for ${filtered.length} campaign${filtered.length === 1 ? "" : "s"} (${escapeHtml(describeOverviewFilters())}) and gone when you leave this page.</span></div>
+      <button class="btn btn-ghost btn-sm" id="filteredInsightsBtn" data-has-cached="${!!cached}" onclick="generateFilteredInsights()" style="margin-bottom:4px;">${cached ? "🔄 Regenerate Insights" : "✨ Get insights for this view"}</button>
+      <div class="ai-insights-box" id="filteredInsightsResult" style="${cached ? "display:block;" : ""}">${cached ? renderInsightsBoxContent(cached.text, cached.generatedAt) : ""}</div>
+    </div>`;
+}
+
+function generateFilteredInsights() {
+  const filtered = getFilteredCampaigns();
+  if (filtered.length === 0) return;
+  const key = overviewFilterKey();
+  const f = sumCampaigns(filtered), fm = calcMetrics(f);
+  const all = sumCampaigns(state.allCampaigns), am = calcMetrics(all);
+  const totals = (t, m) => ({ sent: t.sent, delivered: m.delivered, openRate: m.openRate, clickRate: m.clickRate, bounceRate: m.bpct, unsubRate: m.unsubRate });
+  runInsightsRequest("filteredInsightsBtn", "filteredInsightsResult", {
+    scope: "filtered",
+    save: false,
+    filterSummary: describeOverviewFilters(),
+    campaignCount: filtered.length,
+    totalCampaigns: state.allCampaigns.length,
+    filteredTotals: totals(f, fm),
+    allCampaignsTotals: totals(all, am),
+    data: overviewInsightRows(filtered)
+  }, (text, generatedAt) => {
+    state.filteredInsight = { key, text, generatedAt };
+    const btn = document.getElementById("filteredInsightsBtn");
+    if (btn && overviewFilterKey() === key) btn.dataset.hasCached = "true";
   });
 }
 
