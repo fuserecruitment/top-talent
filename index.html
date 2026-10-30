@@ -798,6 +798,63 @@ const FLOW_URLS = { getCampaignState: "https://top-talent-proxy.marketing-1b3.wo
 
 // Must match the exact Choice values in the TopTalentCampaigns.Industry column
 const INDUSTRIES = ["Insurance", "Manufacturing", "Trades", "Infrastructure"];
+
+// FY27 branch structure, mirroring the "TT … FY27 – NEW TEMPLATE" automations in
+// Bullhorn Automation. One branch per email, named "<state> - <segment> …".
+// Candidate focus per week comes from the "Branching Ideas" planning sheet and
+// goes into each branch's team-only notes. List criteria are left blank.
+const FY27_TEMPLATES = (() => {
+  const focusNote = (w1, w2, extra) =>
+    `FY27 candidate focus — Week 1: ${w1 || "—"} | Week 2: ${w2 || "—"}${extra ? ` (${extra})` : ""}`;
+  const branch = (name, w1, w2, extra) => ({ name, criteria: "", notes: focusNote(w1, w2, extra) });
+
+  const manu = [];
+  const manuStates = ["QLD", "VIC", "NSW"];
+  const manuSegment = (segment, groups) => groups.forEach(g =>
+    manuStates.forEach(st => manu.push(branch(`${st} - ${segment} - ${g.label}`, g.w1, g.w2))));
+  const hr = (w1) => ({ label: "HR/Exec/GM", w1, w2: "Corporate Services + Tech" });
+  const manuOps = { label: "Manu & Ops, Trades & Labour", w1: "Manufacturing / Production + CS", w2: "Manufacturing / Production + CS" };
+  const engg = { label: "Engg & Technical", w1: "Engineering & Technical + CS", w2: "Engineering & Technical + CS" };
+  manuSegment("FMCG", [hr("Manufacturing / Production"), manuOps, engg]);
+  manuSegment("Logistics & Supply Chain", [
+    hr("Supply Chain & Logistics"),
+    { label: "Supply Chain & Logistics", w1: "Supply Chain & Logistics + CS", w2: "Supply Chain & Logistics + CS" }
+  ]);
+  manuSegment("Industrial & Heavy", [hr("Manufacturing / Production"), manuOps, engg]);
+  manuSegment("Health & Life Sciences", [
+    hr("Manufacturing / Production"),
+    { label: "Scientific", w1: "Scientific", w2: "Scientific + CS" },
+    { label: "Manu & Ops", w1: "Manufacturing / Production", w2: "Manufacturing / Production + CS" }
+  ]);
+
+  const ins = [];
+  const insSegment = (segment, states, w1, w2, extra) =>
+    states.forEach(st => ins.push(branch(`${st} - ${segment}`, w1, w2, extra)));
+  const vqn = ["VIC", "QLD", "NSW"];
+  insSegment("Ins. Broking", vqn, "Broking", "Broking + CS + Tech");
+  insSegment("Claims & Service Providers", vqn, "Claims", "Claims + CS + Tech");
+  insSegment("Insurers & Underwriting", vqn, "All Insurance", "Insurance + CS + Tech", "not broking candidates");
+  insSegment("Insurance Building", ["ALL"], "Insurance Building + CS", "Insurance Building + CS + Tech", "Claims, Estimator");
+  insSegment("Workers Compensation", ["QLD & SYD"], "Workers Comp + CS", "Workers Comp + CS + Tech");
+  // The planning sheet only fills week 1 for the first state of these four segments.
+  ins.push(branch("VIC - Superannuation", "Superannuation + CS", "Superannuation + CS + Tech"));
+  ins.push(branch("QLD - Superannuation", null, "Superannuation + CS + Tech"));
+  ins.push(branch("SYD - Superannuation", null, "Superannuation + CS + Tech"));
+  ins.push(branch("VIC - Mortgage Broking", "Mortgage Brokers + CS", "Mortgage Brokers + CS + Tech"));
+  ins.push(branch("QLD - Mortgage Broking", null, "Mortgage Brokers + CS + Tech"));
+  ins.push(branch("VIC - Financial Planning", "Financial Planners + CS", "Financial Planners + CS + Tech"));
+  ins.push(branch("QLD - Financial Planning", null, "Financial Planners + CS + Tech"));
+
+  const infra = [];
+  const etCs = "Engineering + Technical + Trades + CS + Tech";
+  ["Renewables", "Waste", "Transport", "Water", "Power", "Other"].forEach(seg =>
+    infra.push(branch(`ALL - ${seg}`, "Engineering + Technical + Trades", etCs)));
+  infra.push(branch("ALL - Trades & Services - Electrical", null, "Electrical & Trades"));
+  infra.push(branch("ALL - Trades & Services - Plumbing", null, "Plumbing & Trades"));
+  infra.push(branch("ALL - Trades & Services - Construction", null, "Building & Construction"));
+
+  return { Manufacturing: manu, Insurance: ins, Infrastructure: infra };
+})();
 const STATUS_OPTIONS = ["Not Started", "In Progress", "In Review", "Ready for Bullhorn", "Scheduled", "Sent"];
 
 function statusClass(status) {
@@ -1522,6 +1579,9 @@ function renderNewCampaignForm() {
         <label style="display:inline-flex;align-items:center;gap:6px;text-transform:none;font-weight:400;font-size:14px;color:var(--ink);">
           <input type="radio" name="newCampaignMode" value="template" style="width:auto;margin:0;"> Standard branches for this industry
         </label>
+        <label id="newCampaignFy27Option" style="display:none;align-items:center;gap:6px;text-transform:none;font-weight:400;font-size:14px;color:var(--ink);margin-left:18px;">
+          <input type="radio" name="newCampaignMode" value="fy27" style="width:auto;margin:0;"> <span id="newCampaignFy27Label"></span>
+        </label>
       </div>
       <button class="btn btn-accent btn-sm" onclick="submitNewCampaign()">Create Campaign</button>
       <button class="btn btn-ghost btn-sm" onclick="cancelNewCampaignForm()" style="margin-left:8px;">Cancel</button>
@@ -1547,6 +1607,16 @@ function updateNewCampaignNamePreview() {
   const industry = document.getElementById("newCampaignIndustry").value;
   const preview = document.getElementById("newCampaignNamePreview");
   if (preview) preview.textContent = generateCampaignName(industry);
+
+  // The FY27 option only exists for industries that have an FY27 structure.
+  const fy27 = FY27_TEMPLATES[industry];
+  const fy27Option = document.getElementById("newCampaignFy27Option");
+  if (fy27Option) {
+    fy27Option.style.display = fy27 ? "inline-flex" : "none";
+    document.getElementById("newCampaignFy27Label").textContent = fy27 ? `FY27 structure (new) — ${fy27.length} branches` : "";
+    const fy27Radio = document.querySelector('input[name="newCampaignMode"][value="fy27"]');
+    if (!fy27 && fy27Radio && fy27Radio.checked) document.querySelector('input[name="newCampaignMode"][value="blank"]').checked = true;
+  }
 }
 
 function cancelNewCampaignForm() {
@@ -1564,12 +1634,29 @@ async function submitNewCampaign() {
       const initialSendDate = new Date().toISOString().slice(0, 10);
       await callFlow(FLOW_URLS.upsertCampaign, {
         campaignId, industry, status: "Not Started",
-        sendDate: initialSendDate, notes: "", campaignLink: "",
+        sendDate: initialSendDate, notes: mode === "fy27" ? "Created from the FY27 template." : "", campaignLink: "",
         aiInsights: "", aiInsightsGeneratedAt: "",
         lastEditedBy: getUserName()
       });
 
-      if (mode === "template") {
+      if (mode === "fy27") {
+        const fy27Branches = FY27_TEMPLATES[industry] || [];
+        // A few at a time: 33 sequential calls would take a long while.
+        for (let i = 0; i < fy27Branches.length; i += 3) {
+          await Promise.all(fy27Branches.slice(i, i + 3).map((t, j) => callFlow(FLOW_URLS.upsertBranch, {
+            branchId: genId("BR"), campaignId, name: t.name, subjectLine: "",
+            status: "Not Started",
+            sortOrder: i + j,
+            sender: "%OWNER%", senderTitle: "%OWNERPOSITIONTITLE%", senderEmail: "%OWNEREMAIL%", senderPhone: "%OWNERMOBILE%",
+            intro: "", outro: "", ctaText: "New candidates are on our website now! Browse here.",
+            ctaLink: "https://www.fuserecruitment.com/employers-available-candidates/",
+            criteria: t.criteria || "", notes: t.notes || "", pendingCandidateIds: "", subjectLineVariants: "[]",
+            replies: 0, sent: 0, opens: 0, clicks: 0, actions: 0, bounces: 0, unsubs: 0,
+            totalClicks: 0, pageViews: 0, jobViews: 0,
+            sendDate: initialSendDate
+          })));
+        }
+      } else if (mode === "template") {
         // getBranchTemplates actually returns { templates: [{ name, listCriteria }] }.
         // The branches/branchNames fallbacks are kept in case the flow's shape
         // changes again later — this always tries the real shape first.
